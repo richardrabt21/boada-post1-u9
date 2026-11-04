@@ -41,3 +41,22 @@ mvn test
 
 - Java 21, Spring Boot 3.5, Spring Data JPA, H2, JUnit 5, Mockito
 - Apache Maven, Git, GitHub
+## Parte 2 — Refactor DIP, integración y CI/CD
+
+### Diagnóstico: por qué `enviarRecordatorioUrgente` no se puede testear
+
+La primera versión de `enviarRecordatorioUrgente` construye el canal con
+`new SmsReminderChannel(new TwilioNotificadorSmsGateway())` (línea 54 de
+`CitaReminderServiceImpl`). Como el objeto se crea dentro del cuerpo del método,
+la clase decide por sí misma qué implementación concreta usa y no existe ningún
+punto por donde una prueba pueda sustituirlo por un test double. Por eso no se
+puede escribir la prueba "el gateway de SMS falla y la cita no debe marcarse como
+enviada".
+
+En contraste, `enviarRecordatoriosPendientes()` sí es testeable desde la Parte 1:
+recibe el repositorio, la Factory y el `Clock` por constructor, así que la prueba
+puede inyectarle mocks y un reloj fijo.
+
+Técnicamente se podría interceptar ese `new` con `Mockito.mockConstruction()`,
+pero eso es una señal de que el problema es el diseño y no la herramienta: se
+resuelve aplicando DIP, no con una API de pruebas más avanzada.
