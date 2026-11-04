@@ -11,6 +11,7 @@
         <relativePath/>
     </parent>
 
+
     <groupId>com.clinica</groupId>
     <artifactId>recordatorios-citas-service</artifactId>
     <version>0.0.1-SNAPSHOT</version>
