@@ -175,4 +175,4 @@ Pipeline de GitHub Actions ejecutado con éxito:
 
 ## Conclusiones
 
-[Escribe aquí un párrafo de 3 a 5 oraciones con tus aprendizajes de ambas partes]
+Este laboratorio mostró que la facilidad para probar un servicio depende del diseño y no de la herramienta de pruebas. Strategy y Factory Method permitieron aislar `CitaReminderServiceImpl` con un solo `@Mock ReminderChannel`, y el `Clock` inyectado hizo determinista una ventana de 24 horas que de otro modo cambiaría en cada ejecución. El caso de `enviarRecordatorioUrgente` fue el más claro: con el `new` hardcodeado no había dónde sustituir el canal, y al moverlo al composition root la prueba del fallo del gateway pasó a ser posible. También aprendí a elegir el tipo de test double según lo que se quiere comprobar: mock cuando hay que verificar interacciones, y fake (`Clock.fixed`, H2) cuando existe una implementación real y fiel. Finalmente, usar H2 en memoria simplificó el pipeline de GitHub Actions, porque no necesitó un contenedor de base de datos.
