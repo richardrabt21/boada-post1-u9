@@ -60,3 +60,18 @@ puede inyectarle mocks y un reloj fijo.
 Técnicamente se podría interceptar ese `new` con `Mockito.mockConstruction()`,
 pero eso es una señal de que el problema es el diseño y no la herramienta: se
 resuelve aplicando DIP, no con una API de pruebas más avanzada.
+### Pruebas de integración: por qué H2 real pero gateway mockeado
+
+`CitaRepositoryTest` (`@DataJpaTest`) prueba la consulta derivada del repositorio
+contra una H2 en memoria, y `CitaReminderServiceIntegrationTest`
+(`@SpringBootTest`) levanta el contexto completo de Spring con un `Clock` fijo y
+un `@MockBean` sobre `NotificadorSmsGateway`.
+
+No es inconsistente que convivan una base de datos real y un mock. H2 es un fake
+aceptable porque su contrato SQL/JPA es equivalente al de la base real y no
+requiere infraestructura adicional. Un proveedor de SMS de terceros no tiene un
+equivalente gratuito y determinista; mockearlo evita depender de credenciales,
+de la red y de la disponibilidad del proveedor en cada ejecución del pipeline.
+
+Observación: en Spring Boot 3.5 `@MockBean` está marcado como deprecated y su
+reemplazo es `@MockitoBean`. Se usó `@MockBean` por seguir el enunciado.
