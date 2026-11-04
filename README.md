@@ -1,5 +1,7 @@
 # Recordatorios Citas Service
 
+![CI](https://github.com/richardrabt21/boada-post1-u9/actions/workflows/ci.yml/badge.svg)
+
 ## Descripción
 
 Repositorio del post-contenido de la Unidad 9 de Patrones de Diseño de Software.
@@ -10,9 +12,20 @@ constructor.
 
 ## Parte 1 — Pruebas unitarias con JUnit 5 y Mockito
 
-`CitaReminderServiceImplTest` aísla `CitaReminderServiceImpl` de sus tres
+`CitaReminderServiceImplTest` aísla `CitaReminderServiceImpl` de sus
 colaboradores. Ver "Decisiones de diseño" para la justificación de por qué cada
 uno se mockeó o se resolvió con un fake.
+
+![Pruebas de la Parte 1 en verde](docs/img/pruebas-parte1.png)
+
+## Parte 2 — Refactor DIP, integración y CI/CD
+
+`enviarRecordatorioUrgente` nació con un `new` hardcodeado que lo hacía imposible
+de testear; el refactor lo movió a `config/CanalUrgenteConfig.java` e inyectó la
+abstracción por constructor. `CitaRepositoryTest` (`@DataJpaTest`) y
+`CitaReminderServiceIntegrationTest` (`@SpringBootTest`) prueban la persistencia
+y el flujo completo con H2 y un `Clock` fijo. El pipeline
+`.github/workflows/ci.yml` ejecuta `mvn verify` en cada push.
 
 ## Decisiones de diseño
 
@@ -31,41 +44,85 @@ uno se mockeó o se resolvió con un fake.
   instante congelado. Mockearlo exigiría stubbear `instant()` y `getZone()` por
   separado y sería menos fiel al comportamiento real.
 
-## Ejecutar las pruebas
+### Qué patrón facilitó qué prueba
 
-```bash
-mvn test
+- **Strategy (`ReminderChannel`).** Sin esta interfaz, la lógica de envío (SMTP o
+  SMS) estaría escrita dentro del servicio, y probar la selección de canal
+  exigiría mockear librerías de bajo nivel. Con Strategy, un solo
+  `@Mock ReminderChannel` sirve para verificar cualquier canal con un único
+  método `enviar()`.
+- **Factory Method (`ReminderChannelFactory`).** Sin ella, el servicio tendría un
+  `if/else` o un `switch` embebido, y esa decisión solo sería observable de
+  forma indirecta. Con la Factory inyectada, la prueba de
+  `usaElCanalPreferido` stubbea `obtenerCanal(EMAIL)` y comprueba que el canal
+  devuelto recibe el mensaje.
+- **DIP + `Clock` inyectado.** Al recibir el reloj por constructor, la prueba
+  `ventanaDeterministaSegunClockFijo` puede afirmar los límites exactos de la
+  ventana de 24 horas. Con `Clock.systemDefaultZone()` esa aserción cambiaría en
+  cada ejecución.
+
+### El refactor DIP (Parte 2)
+
+Antes de tocar el código se documentó el diagnóstico: `enviarRecordatorioUrgente`
+construía el canal con `new` dentro del método (línea 54 de
+`CitaReminderServiceImpl`), así que no había ningún punto de sustitución. En
+contraste, `enviarRecordatoriosPendientes()` ya era testeable desde la Parte 1
+porque recibía sus colaboradores por constructor. Técnicamente se podría
+interceptar ese `new` con `Mockito.mockConstruction()`, pero eso indica que el
+problema es el diseño y no la herramienta.
+
+**Antes** — `new` hardcodeado dentro del método (no testeable):
+
+```java
+@Override
+public void enviarRecordatorioUrgente(Long citaId) {
+    Cita cita = citaRepository.findById(citaId)
+            .orElseThrow(() -> new CitaNoEncontradaException(citaId));
+
+    ReminderChannel canalUrgente = new SmsReminderChannel(new TwilioNotificadorSmsGateway());
+    canalUrgente.enviar(cita, "URGENTE: su cita es en menos de 2 horas y no ha sido confirmada");
+
+    cita.setRecordatorioEnviado(true);
+    citaRepository.save(cita);
+}
 ```
 
-## Herramientas utilizadas
+**Después** — el `new` vive en el composition root y el servicio recibe la
+abstracción por constructor:
 
-- Java 21, Spring Boot 3.5, Spring Data JPA, H2, JUnit 5, Mockito
-- Apache Maven, Git, GitHub
-## Parte 2 — Refactor DIP, integración y CI/CD
+```java
+@Configuration
+public class CanalUrgenteConfig {
+    @Bean
+    public ReminderChannel canalUrgente(NotificadorSmsGateway gateway) {
+        return new SmsReminderChannel(gateway);
+    }
+}
+```
 
-### Diagnóstico: por qué `enviarRecordatorioUrgente` no se puede testear
+```java
+public CitaReminderServiceImpl(CitaRepository citaRepository,
+                               ReminderChannelFactory reminderChannelFactory,
+                               @Qualifier("canalUrgente") ReminderChannel canalUrgente,
+                               Clock clock) { ... }
 
-La primera versión de `enviarRecordatorioUrgente` construye el canal con
-`new SmsReminderChannel(new TwilioNotificadorSmsGateway())` (línea 54 de
-`CitaReminderServiceImpl`). Como el objeto se crea dentro del cuerpo del método,
-la clase decide por sí misma qué implementación concreta usa y no existe ningún
-punto por donde una prueba pueda sustituirlo por un test double. Por eso no se
-puede escribir la prueba "el gateway de SMS falla y la cita no debe marcarse como
-enviada".
+@Override
+public void enviarRecordatorioUrgente(Long citaId) {
+    Cita cita = citaRepository.findById(citaId)
+            .orElseThrow(() -> new CitaNoEncontradaException(citaId));
 
-En contraste, `enviarRecordatoriosPendientes()` sí es testeable desde la Parte 1:
-recibe el repositorio, la Factory y el `Clock` por constructor, así que la prueba
-puede inyectarle mocks y un reloj fijo.
+    canalUrgente.enviar(cita, "URGENTE: su cita es en menos de 2 horas y no ha sido confirmada");
 
-Técnicamente se podría interceptar ese `new` con `Mockito.mockConstruction()`,
-pero eso es una señal de que el problema es el diseño y no la herramienta: se
-resuelve aplicando DIP, no con una API de pruebas más avanzada.
+    cita.setRecordatorioEnviado(true);
+    citaRepository.save(cita);
+}
+```
+
+La prueba `enviarRecordatorioUrgente_gatewayFalla_noMarcaComoEnviado` era
+imposible de escribir antes del refactor y es la evidencia de que la
+testabilidad es consecuencia directa de aplicar DIP.
+
 ### Pruebas de integración: por qué H2 real pero gateway mockeado
-
-`CitaRepositoryTest` (`@DataJpaTest`) prueba la consulta derivada del repositorio
-contra una H2 en memoria, y `CitaReminderServiceIntegrationTest`
-(`@SpringBootTest`) levanta el contexto completo de Spring con un `Clock` fijo y
-un `@MockBean` sobre `NotificadorSmsGateway`.
 
 No es inconsistente que convivan una base de datos real y un mock. H2 es un fake
 aceptable porque su contrato SQL/JPA es equivalente al de la base real y no
@@ -73,5 +130,49 @@ requiere infraestructura adicional. Un proveedor de SMS de terceros no tiene un
 equivalente gratuito y determinista; mockearlo evita depender de credenciales,
 de la red y de la disponibilidad del proveedor en cada ejecución del pipeline.
 
-Observación: en Spring Boot 3.5 `@MockBean` está marcado como deprecated y su
-reemplazo es `@MockitoBean`. Se usó `@MockBean` por seguir el enunciado.
+### CI sin contenedor de base de datos
+
+El workflow no incluye un bloque `services:` porque las pruebas de integración
+usan H2 en memoria. Si se hubiera probado contra PostgreSQL con Testcontainers,
+el pipeline necesitaría un runner con Docker y tiempos de arranque mayores.
+
+## Notas de entorno
+
+- **Spring Boot 3.5.0** en lugar de 3.3.x: Spring Initializr ya no ofrece la
+  línea 3.x, y Boot 4 elimina `@MockBean`, que el enunciado exige.
+- **Lombok como procesador de anotaciones**: con JDK 23, `javac` no ejecuta los
+  procesadores del classpath por defecto, así que se declaró Lombok en
+  `annotationProcessorPaths` del `maven-compiler-plugin`.
+- **`@MockBean`** está marcado como deprecated desde Spring Boot 3.4; su
+  reemplazo es `@MockitoBean`. Se mantuvo `@MockBean` por seguir el enunciado.
+- **Bean de `Clock` de prueba** renombrado a `clockDeterminista` para no chocar
+  con el bean `clock` de `ClockConfig`, ya que la sobrescritura de beans está
+  desactivada por defecto.
+- **Errata del enunciado**: el comando del workflow debe ser
+  `--no-transfer-progress` (con dos guiones pegados).
+
+## Ejecutar las pruebas
+
+```bash
+mvn test      # Pruebas unitarias
+mvn verify    # Unitarias + integración
+```
+
+## Evidencia
+
+Todas las pruebas en verde (9 en total) con `mvn clean verify`:
+
+![Pruebas finales en verde](docs/img/pruebas-finales.png)
+
+Pipeline de GitHub Actions ejecutado con éxito:
+
+![Pipeline de CI exitoso](docs/img/ci-exitoso.png)
+
+## Herramientas utilizadas
+
+- Java 21, Spring Boot 3.5, Spring Data JPA, H2, JUnit 5, Mockito
+- Apache Maven, GitHub Actions, Git, GitHub
+
+## Conclusiones
+
+[Escribe aquí un párrafo de 3 a 5 oraciones con tus aprendizajes de ambas partes]
